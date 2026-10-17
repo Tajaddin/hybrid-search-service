@@ -1,0 +1,50 @@
+rule_files:
+  - alert_rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 1m
+    input_series:
+      # p99 of hybrid uncached searches: 15 of 16 observations in the 0.1 s bucket, one above 0.3 s -> p99 ~ 0.5 s
+      - series: 'search_latency_seconds_bucket{ranker="hybrid",cached="false",le="0.1",job="hss-api"}'
+        values: "0+15x20"
+      - series: 'search_latency_seconds_bucket{ranker="hybrid",cached="false",le="0.2",job="hss-api"}'
+        values: "0+15x20"
+      - series: 'search_latency_seconds_bucket{ranker="hybrid",cached="false",le="0.5",job="hss-api"}'
+        values: "0+16x20"
+      - series: 'search_latency_seconds_bucket{ranker="hybrid",cached="false",le="+Inf",job="hss-api"}'
+        values: "0+16x20"
+      - series: 'cache_backend_redis{job="hss-api",instance="api:8000"}'
+        values: "0x10"
+      - series: 'up{job="hss-api",instance="api:8000"}'
+        values: "1 1 0 0 0 0 0"
+      - series: 'search_errors_total{job="hss-api"}'
+        values: "0 0 0 0 0 0 0"
+      - series: 'search_requests_total{job="hss-api",ranker="hybrid",cached="false"}'
+        values: "0+100x7"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SearchSloP99Breached
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "hybrid search p99 above 200 ms"
+              description: "p99 over 10 minutes is 452ms; the SLO is 200 ms for uncached hybrid searches."
+      - eval_time: 6m
+        alertname: CacheFellBackToMemory
+        exp_alerts:
+          - exp_labels: { severity: warning, job: hss-api, instance: "api:8000" }
+            exp_annotations:
+              summary: "the API is caching in-process instead of Redis"
+              description: "Redis was unreachable at start-up on api:8000; results are not shared across replicas."
+      - eval_time: 5m
+        alertname: ApiDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: hss-api, instance: "api:8000" }
+            exp_annotations:
+              summary: "search API is not being scraped"
+              description: "No scrape from api:8000 for 2 minutes."
+      - eval_time: 6m
+        alertname: SearchErrorRateHigh
+        exp_alerts: []

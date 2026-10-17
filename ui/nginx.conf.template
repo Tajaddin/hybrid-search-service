@@ -1,0 +1,25 @@
+# Rendered by the nginx image's envsubst at start-up; only DNS_RESOLVER is substituted.
+server {
+  listen 80;
+  server_name _;
+  root /usr/share/nginx/html;
+  index index.html;
+
+  add_header X-Content-Type-Options nosniff always;
+  add_header Referrer-Policy no-referrer always;
+  add_header Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" always;
+
+  resolver ${DNS_RESOLVER} valid=10s ipv6=off;
+  set $api http://api:8000;
+
+  location /api/ {
+    rewrite ^/api/(.*)$ /$1 break;
+    proxy_pass $api;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_read_timeout 60s;
+  }
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}

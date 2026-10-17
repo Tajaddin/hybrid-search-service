@@ -1,0 +1,90 @@
+{
+  "uid": "hss-api",
+  "title": "Hybrid search service",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "Searches per second by ranker (uncached vs cached)",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum by (ranker, cached) (rate(search_requests_total[2m]))", "legendFormat": "{{ranker}} cached={{cached}}" }]
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Uncached hybrid latency p50 / p95 / p99 (SLO 200 ms)",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.2 }] }, "custom": { "thresholdsStyle": { "mode": "line" } } } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(search_latency_seconds_bucket{ranker=\"hybrid\",cached=\"false\"}[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(search_latency_seconds_bucket{ranker=\"hybrid\",cached=\"false\"}[5m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(search_latency_seconds_bucket{ranker=\"hybrid\",cached=\"false\"}[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "p95 per stage (hybrid_rerank)",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(search_stage_seconds_bucket{ranker=\"hybrid_rerank\"}[5m])))", "legendFormat": "{{stage}}" }]
+    },
+    {
+      "id": 4, "type": "stat", "title": "Cache hit share (10m)",
+      "gridPos": { "x": 12, "y": 8, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "targets": [{ "expr": "sum(rate(search_requests_total{cached=\"true\"}[10m])) / sum(rate(search_requests_total[10m]))" }]
+    },
+    {
+      "id": 5, "type": "stat", "title": "Cache backend",
+      "gridPos": { "x": 16, "y": 8, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "textMode": "value" },
+      "fieldConfig": { "defaults": { "mappings": [{ "type": "value", "options": { "0": { "text": "memory", "color": "orange" }, "1": { "text": "redis", "color": "green" } } }] } },
+      "targets": [{ "expr": "max(cache_backend_redis)" }]
+    },
+    {
+      "id": 6, "type": "stat", "title": "Index documents",
+      "gridPos": { "x": 20, "y": 8, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "max(index_documents)" }]
+    },
+    {
+      "id": 7, "type": "stat", "title": "Empty results share (15m)",
+      "gridPos": { "x": 12, "y": 12, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "targets": [{ "expr": "sum(rate(search_empty_total[15m])) / sum(rate(search_requests_total{cached=\"false\"}[15m]))" }]
+    },
+    {
+      "id": 8, "type": "stat", "title": "Errors (1h)",
+      "gridPos": { "x": 16, "y": 12, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(increase(search_errors_total[1h]))" }]
+    },
+    {
+      "id": 9, "type": "stat", "title": "Rate limited (1h)",
+      "gridPos": { "x": 20, "y": 12, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(increase(rate_limit_rejections_total[1h]))" }]
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Interleaving: impressions and clicks by team per minute",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(increase(interleave_impressions_total[1m]))", "legendFormat": "impressions" },
+        { "expr": "sum by (team) (increase(interleave_clicks_total[1m]))", "legendFormat": "clicks team {{team}}" }
+      ]
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "HTTP requests per second by route and status",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum by (route, status) (rate(http_request_duration_seconds_count[2m]))", "legendFormat": "{{route}} {{status}}" }]
+    }
+  ]
+}

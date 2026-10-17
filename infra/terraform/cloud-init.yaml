@@ -1,0 +1,60 @@
+#cloud-config
+# Installs Docker, writes the Compose stack and starts it from GHCR images. The prepared data (catalog,
+# vocabulary, attributes, embeddings) and reports are uploaded by scripts/deploy.sh over SSH after boot,
+# then the indexer job builds the OpenSearch index on the VM.
+package_update: true
+packages: [ca-certificates, curl, gnupg]
+write_files:
+  - path: /opt/hss/docker-compose.yml
+    permissions: "0644"
+    content: |
+      ${indent(6, compose_file)}
+  - path: /opt/hss/observability/prometheus.yml
+    permissions: "0644"
+    content: |
+      ${indent(6, prom_config)}
+  - path: /opt/hss/observability/alert_rules.yml
+    permissions: "0644"
+    content: |
+      ${indent(6, alert_rules)}
+  - path: /opt/hss/observability/alertmanager.yml
+    permissions: "0644"
+    content: |
+      ${indent(6, alertmanager)}
+  - path: /opt/hss/.env
+    permissions: "0600"
+    content: |
+      HSS_ADMIN_KEY=${admin_key}
+      UI_PORT=80
+      API_PORT=8120
+      OPENSEARCH_JAVA_OPTS=-Xms4g -Xmx4g
+  - path: /opt/hss/docker-compose.override.yml
+    permissions: "0644"
+    content: |
+      services:
+        api:
+          image: ghcr.io/${ghcr_owner}/hybrid-search-service/api:${image_tag}
+          build: !reset null
+        ui:
+          image: ghcr.io/${ghcr_owner}/hybrid-search-service/ui:${image_tag}
+          build: !reset null
+        indexer:
+          image: ghcr.io/${ghcr_owner}/hybrid-search-service/api:${image_tag}
+        opensearch:
+          ports: !reset []
+        redis:
+          ports: !reset []
+runcmd:
+  - sysctl -w vm.max_map_count=262144
+  - echo vm.max_map_count=262144 >> /etc/sysctl.conf
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  - echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  - usermod -aG docker ubuntu
+  - mkdir -p /opt/hss/data/prepared /opt/hss/data/models /opt/hss/reports /opt/hss/load
+  - chown -R ubuntu:ubuntu /opt/hss
+  - iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+  - netfilter-persistent save || true
+  - cd /opt/hss && docker compose pull opensearch redis && docker compose up -d opensearch redis

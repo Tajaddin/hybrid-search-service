@@ -1,0 +1,127 @@
+name: hss
+
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"  # local only; the cloud VM fronts it with the API and never exposes 9200
+      OPENSEARCH_JAVA_OPTS: ${OPENSEARCH_JAVA_OPTS:--Xms2g -Xmx2g}
+      bootstrap.memory_lock: "true"
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+    volumes: [osdata:/usr/share/opensearch/data]
+    ports: ["${OPENSEARCH_PORT:-9201}:9200"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
+    ports: ["${REDIS_PORT:-6381}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    image: hss/api:local
+    environment:
+      HSS_OPENSEARCH_URL: http://opensearch:9200
+      HSS_REDIS_URL: redis://redis:6379/0
+      HSS_PREPARED_DIR: /data/prepared
+      HSS_MODELS_DIR: /data/models
+      HSS_REPORTS_DIR: /app/reports
+      HSS_RATE_LIMIT: ${HSS_RATE_LIMIT:-6000/minute}  # per client address; the k6 run comes from one address
+      HSS_ADMIN_KEY: ${HSS_ADMIN_KEY:-}
+      HSS_CORS_ORIGINS: ${HSS_CORS_ORIGINS:-http://localhost:4310,http://localhost:5173}
+      HSS_LOG_LEVEL: ${HSS_LOG_LEVEL:-INFO}
+      HSS_FORWARDED_ALLOW_IPS: "*"
+      HSS_WORKERS: ${HSS_WORKERS:-4}
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-4}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    volumes:
+      - ./data/prepared:/data/prepared:ro
+      - ./data/models:/data/models
+      - ./reports:/app/reports:ro
+    ports: ["${API_PORT:-8120}:8000"]
+    depends_on:
+      opensearch: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+
+  ui:
+    build: ./ui
+    image: hss/ui:local
+    ports: ["${UI_PORT:-4310}:80"]
+    depends_on: [api]
+
+  # Builds the index inside the image against the compose OpenSearch (the way a deployment would seed it).
+  indexer:
+    profiles: [jobs]
+    image: hss/api:local
+    command: ["hss", "index"]
+    environment:
+      HSS_OPENSEARCH_URL: http://opensearch:9200
+      HSS_PREPARED_DIR: /data/prepared
+      HSS_MODELS_DIR: /data/models
+    volumes:
+      - ./data/prepared:/data/prepared:ro
+      - ./data/models:/data/models
+    depends_on:
+      opensearch: { condition: service_healthy }
+
+  k6:
+    profiles: [load]
+    image: grafana/k6:0.57.0
+    volumes: ["./load:/scripts:ro", "./reports/k6-raw:/out"]
+    environment:
+      API_BASE: http://api:8000
+      RATE: ${RATE:-50}
+      DURATION: ${DURATION:-60s}
+      RERANK_RATE: ${RERANK_RATE:-2}
+    entrypoint: ["k6"]
+    command: ["run", "/scripts/search.js"]
+    depends_on: [api]
+
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v3.5.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+    ports: ["${PROMETHEUS_PORT:-9107}:9090"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  alertmanager:
+    profiles: [observability]
+    image: prom/alertmanager:v0.28.1
+    volumes: ["./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro"]
+    ports: ["${ALERTMANAGER_PORT:-9108}:9093"]
+
+  grafana:
+    profiles: [observability]
+    image: grafana/grafana:12.1.1
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["${GRAFANA_PORT:-3008}:3000"]
+    depends_on: [prometheus]
+
+volumes:
+  osdata:

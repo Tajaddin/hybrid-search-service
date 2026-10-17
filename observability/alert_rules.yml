@@ -1,0 +1,53 @@
+groups:
+  - name: hss-api
+    rules:
+      - alert: ApiDown
+        expr: up{job=~"hss-api.*"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "search API is not being scraped"
+          description: "No scrape from {{ $labels.instance }} for 2 minutes."
+
+      # The SLO: p99 of uncached hybrid searches under 200 ms over 10 minutes.
+      - alert: SearchSloP99Breached
+        expr: |
+          histogram_quantile(0.99, sum by (le) (rate(search_latency_seconds_bucket{ranker="hybrid",cached="false"}[10m]))) > 0.2
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "hybrid search p99 above 200 ms"
+          description: "p99 over 10 minutes is {{ $value | humanizeDuration }}; the SLO is 200 ms for uncached hybrid searches."
+
+      - alert: SearchErrorRateHigh
+        expr: |
+          sum(rate(search_errors_total[5m])) / clamp_min(sum(rate(search_requests_total[5m])), 1e-9) > 0.02
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "more than 2% of searches fail"
+          description: "Error share over 5 minutes is {{ $value | humanizePercentage }}; OpenSearch or the models are in trouble."
+
+      - alert: EmptyResultsSpike
+        expr: |
+          sum(rate(search_empty_total[15m])) / clamp_min(sum(rate(search_requests_total{cached="false"}[15m])), 1e-9) > 0.3
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "more than 30% of searches return nothing"
+          description: "Empty share over 15 minutes is {{ $value | humanizePercentage }}; check the index and the query understanding."
+
+      - alert: CacheFellBackToMemory
+        expr: cache_backend_redis == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "the API is caching in-process instead of Redis"
+          description: "Redis was unreachable at start-up on {{ $labels.instance }}; results are not shared across replicas."
+
+      - alert: RateLimitingHeavy
+        expr: increase(rate_limit_rejections_total[5m]) > 100
+        labels: { severity: warning }
+        annotations:
+          summary: "many requests rate limited"
+          description: "{{ $value | printf \"%.0f\" }} requests answered 429 in 5 minutes."

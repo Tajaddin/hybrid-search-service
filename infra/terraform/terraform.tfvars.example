@@ -1,0 +1,11 @@
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaa"
+user_ocid        = "ocid1.user.oc1..aaaa"
+fingerprint      = "aa:bb:cc:..."
+private_key_path = "~/.oci/oci_api_key.pem"
+compartment_ocid = "ocid1.tenancy.oc1..aaaa" # the tenancy OCID is fine for a free account
+region           = "us-ashburn-1"
+ssh_public_key   = "ssh-ed25519 AAAA... you@laptop"
+admin_cidr       = "203.0.113.4/32"
+ghcr_owner       = "tajaddin"
+image_tag        = "latest"
+admin_key        = "replace-with-a-long-random-string"
