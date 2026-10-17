@@ -1,0 +1,34 @@
+{
+  "rate_per_s": 50,
+  "duration": "60s",
+  "hybrid_uncached_ms": {
+    "count": 3001,
+    "med": 26.490177,
+    "p90": 33.688516,
+    "p95": 36.586821,
+    "p99": 55.109537,
+    "max": 3740.262838
+  },
+  "hybrid_rerank_uncached_ms": {
+    "count": 120,
+    "med": 662.0441915,
+    "p90": 987.9399364000001,
+    "p95": 1092.8828053,
+    "p99": 1287.1302015200001,
+    "max": 1493.260365
+  },
+  "cached_ms": {
+    "count": 1500,
+    "med": 1.875877,
+    "p90": 2.2279663000000003,
+    "p95": 2.4432772,
+    "p99": 2.88116166,
+    "max": 3.55422
+  },
+  "http_req_failed": 0,
+  "requests": 4654,
+  "thresholds": {
+    "search_hybrid_ms": true,
+    "http_req_failed": true
+  }
+}

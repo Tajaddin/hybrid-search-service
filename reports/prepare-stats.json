@@ -1,0 +1,15 @@
+{
+  "eval_queries": 2000,
+  "eval_judgments": 40022,
+  "judged_products": 38902,
+  "catalog_products": 200000,
+  "brands": 68876,
+  "colors": 37440,
+  "vocabulary_terms": 53091,
+  "label_counts": {
+    "I": 6975,
+    "E": 17665,
+    "S": 13647,
+    "C": 1735
+  }
+}

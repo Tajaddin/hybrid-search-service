@@ -1,0 +1,115 @@
+{
+  "evaluated_at": "2026-10-17T19:47:29+00:00",
+  "queries": 2000,
+  "gains": {
+    "E": 1.0,
+    "S": 0.1,
+    "C": 0.01,
+    "I": 0.0,
+    "unjudged": 0.0
+  },
+  "understood_filters_applied": false,
+  "rankers": {
+    "bm25": {
+      "queries": 2000,
+      "ndcg10": 0.39,
+      "mrr10": 0.546,
+      "recall50_es": 0.51,
+      "ndcg10_ci95": [
+        0.3769,
+        0.4031
+      ],
+      "latency_ms": {
+        "p50": 54.4,
+        "p95": 63.4,
+        "p99": 70.4
+      }
+    },
+    "knn": {
+      "queries": 2000,
+      "ndcg10": 0.3339,
+      "mrr10": 0.4874,
+      "recall50_es": 0.4667,
+      "ndcg10_ci95": [
+        0.3211,
+        0.3467
+      ],
+      "latency_ms": {
+        "p50": 65.1,
+        "p95": 83.9,
+        "p99": 268.3
+      }
+    },
+    "hybrid": {
+      "queries": 2000,
+      "ndcg10": 0.3966,
+      "mrr10": 0.5556,
+      "recall50_es": 0.5536,
+      "ndcg10_ci95": [
+        0.3836,
+        0.4096
+      ],
+      "latency_ms": {
+        "p50": 74.8,
+        "p95": 86.2,
+        "p99": 93.6
+      }
+    },
+    "hybrid_rerank": {
+      "queries": 2000,
+      "ndcg10": 0.4688,
+      "mrr10": 0.6381,
+      "recall50_es": 0.5536,
+      "ndcg10_ci95": [
+        0.4555,
+        0.482
+      ],
+      "latency_ms": {
+        "p50": 415.8,
+        "p95": 547.2,
+        "p99": 629.1
+      }
+    }
+  },
+  "comparisons": [
+    {
+      "a": "bm25",
+      "b": "hybrid",
+      "mean_delta": 0.0066,
+      "ci95": [
+        -0.0008,
+        0.0141
+      ],
+      "wins": 930,
+      "losses": 771,
+      "ties": 299,
+      "sign_test_p": 0.000126
+    },
+    {
+      "a": "knn",
+      "b": "hybrid",
+      "mean_delta": 0.0627,
+      "ci95": [
+        0.0556,
+        0.0698
+      ],
+      "wins": 1203,
+      "losses": 476,
+      "ties": 321,
+      "sign_test_p": 0.0
+    },
+    {
+      "a": "hybrid",
+      "b": "hybrid_rerank",
+      "mean_delta": 0.0721,
+      "ci95": [
+        0.0643,
+        0.08
+      ],
+      "wins": 1169,
+      "losses": 565,
+      "ties": 266,
+      "sign_test_p": 0.0
+    }
+  ]
+}

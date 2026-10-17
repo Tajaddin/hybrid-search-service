@@ -1,0 +1,24 @@
+{
+  "method": "team-draft interleaving, simulated clicks from ESCI labels with position bias",
+  "click_model": {
+    "E": 0.6,
+    "S": 0.3,
+    "C": 0.1,
+    "I": 0.02,
+    "unjudged": 0.02
+  },
+  "a": "hybrid",
+  "b": "hybrid_rerank",
+  "queries": 1000,
+  "wins_a": 225,
+  "wins_b": 242,
+  "ties": 533,
+  "b_win_rate": 0.5182,
+  "b_win_rate_ci95": [
+    0.4729,
+    0.5635
+  ],
+  "binomial_p": 0.459099,
+  "verdict": "no significant preference",
+  "queries_for_55_45_at_80_power": 783
+}
