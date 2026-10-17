@@ -91,6 +91,10 @@ class State:
 
     def index_health(self) -> dict[str, Any]:
         try:
+            # cluster.health on a missing index waits for it to appear; answer at once instead so readiness
+            # probes get a quick, honest answer before the indexer has run
+            if not self.engine.os.indices.exists(index=self.engine.index, request_timeout=2):
+                return {"status": "missing", "documents": 0}
             health = self.engine.os.cluster.health(index=self.engine.index, request_timeout=2)
             count = self.engine.os.count(index=self.engine.index)["count"]
             INDEX_DOCS.set(count)

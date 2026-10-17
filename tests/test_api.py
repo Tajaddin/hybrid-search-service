@@ -47,6 +47,11 @@ class FakeQU:
 
 @dataclass
 class FakeOS:
+    class indices:  # noqa: N801
+        @staticmethod
+        def exists(**_):
+            return True
+
     class cluster:  # noqa: N801
         @staticmethod
         def health(**_):
