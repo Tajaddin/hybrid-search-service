@@ -1,0 +1,94 @@
+[project]
+name = "hybrid-search-service"
+version = "0.1.0"
+description = "Product search over the Amazon ESCI catalog: BM25 and kNN in OpenSearch fused by reciprocal rank fusion, a cross-encoder reranker, query understanding, offline NDCG and MRR evaluation, interleaving, Redis cache, rate limits and an SLO"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "Tajaddin Gafarov", email = "gafarovtajaddin@gmail.com" }]
+dependencies = [
+  "pandas>=2.3,<3",
+  "numpy>=2.2,<3",
+  "pyarrow>=19",
+  "opensearch-py>=2.8",
+  "redis>=5.2",
+  "sentence-transformers>=3.4",
+  "torch>=2.6",
+  "symspellpy>=6.7",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.34",
+  "pydantic>=2.10",
+  "pydantic-settings>=2.7",
+  "httpx>=0.28",
+  "typer>=0.15",
+  "structlog>=25",
+  "prometheus-client>=0.21",
+  "slowapi>=0.1.9",
+  "scipy>=1.14",
+  "opentelemetry-sdk>=1.30",
+  "opentelemetry-exporter-otlp-proto-http>=1.30",
+  "opentelemetry-instrumentation-fastapi>=0.51b0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=6",
+  "ruff>=0.9",
+  "mypy>=1.14",
+  "pandas-stubs>=2.2",
+  "pip-audit>=2.7",
+]
+
+[project.scripts]
+hss = "hss.cli:app"
+
+[tool.uv]
+# CPU wheels everywhere: the serving container has no GPU and CI must match the laptop.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hss"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "S", "W", "PL", "RUF", "SIM", "C4", "PT"]
+ignore = ["PLR0913", "PLR0917", "PLR2004", "S101", "S311", "S603", "E501", "PLR0912", "PLR0915", "RUF012", "PLC0415", "PLR0914", "PLR6301"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hss", "conftest"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "PLR", "B011", "PT018"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = true
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["integration: needs OpenSearch and Redis", "slow: long-running"]
+filterwarnings = ["ignore::FutureWarning", "ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["src/hss"]
+omit = ["src/hss/cli.py"]
