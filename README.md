@@ -46,6 +46,8 @@ labels; `make load` runs k6 at 10, 25 and 50 requests/s against the Compose stac
 one summary per rate (`reports/k6-r*.json`). The hybrid and reranked scenarios bypass the cache so the
 numbers are the engine's; a short third scenario replays the sample with the cache on. Latencies in the
 evaluation table are single-query, in-process; the k6 numbers are what a client sees, including queueing.
+The k6 runs predate the rate limiter counting in Redis, which adds one Redis call per limit to each
+rate-limited request; they have not been rerun since.
 
 The first load run is kept as `reports/k6-before-tuning-r50.json`: 50 requests/s gave a hybrid p99 of
 33 s with no failed requests, which is a service that is up and useless. Three changes followed, each
