@@ -227,16 +227,18 @@ def test_eval_summary_and_rate_limit(client):
 LIMITS = {"HSS_REDIS_URL": "", "HSS_RATE_LIMIT": "100/minute", "HSS_EXPENSIVE_RATE_LIMIT": "2/minute"}
 
 
-def test_reranked_uncached_and_interleaved_searches_share_a_smaller_budget():
+def test_reranked_and_interleaved_searches_share_a_smaller_budget():
     with serving(LIMITS) as c:
         assert c.get("/search", params={"q": "a", "ranker": "hybrid_rerank"}).status_code == 200
-        assert c.get("/search", params={"q": "b", "no_cache": "true"}).status_code == 200
+        assert c.get("/interleave", params={"q": "b", "a": "bm25", "b": "knn"}).status_code == 200
         assert c.get("/search", params={"q": "c", "ranker": "hybrid_rerank"}).status_code == 429
-        assert c.get("/search", params={"q": "d", "no_cache": "1"}).status_code == 429
-        assert c.get("/interleave", params={"q": "e", "a": "bm25", "b": "knn"}).status_code == 429
-        # cacheable searches without the reranker only spend the general budget
-        assert c.get("/search", params={"q": "f", "ranker": "hybrid"}).status_code == 200
-        assert c.get("/search", params={"q": "g", "no_cache": "false"}).status_code == 200
+        assert c.get("/interleave", params={"q": "d", "a": "bm25", "b": "knn"}).status_code == 429
+        # skipping the cache costs what a new query costs, so without the reranker it spends the general budget
+        codes = [c.get("/search", params={"q": "e", "ranker": r, "no_cache": "true"}).status_code for r in RANKERS]
+        assert codes == [200, 200, 200]
+
+
+RANKERS = ("bm25", "knn", "hybrid")
 
 
 def test_workers_share_rate_limit_counts_through_redis_and_count_alone_while_it_is_down(fake_redis):

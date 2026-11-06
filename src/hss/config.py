@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # API
     rate_limit: str = "120/minute"  # per client address and route
-    expensive_rate_limit: str = "20/minute"  # per client address: reranked, uncached and interleaved searches
+    expensive_rate_limit: str = "20/minute"  # per client address: reranked searches and interleaved pages
     admin_key: str = ""
     cache_ttl_s: int = 300
     cors_origins: str = "http://localhost:5173,http://localhost:4310"

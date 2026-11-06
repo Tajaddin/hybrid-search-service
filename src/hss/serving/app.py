@@ -1,6 +1,6 @@
 """FastAPI: search with a cache, suggestions, team-draft interleaving with a click log, the evaluation
-summary, health and metrics. Rate limits per client address, counted in Redis and tighter for the searches
-that rerank or skip the cache; an admin key for the interleaving readout."""
+summary, health and metrics. Rate limits per client address, counted in Redis and tighter for reranked and
+interleaved searches; an admin key for the interleaving readout."""
 
 from __future__ import annotations
 
@@ -118,13 +118,9 @@ def _key(request: Request) -> str:
     return get_remote_address(request)
 
 
-_TRUE = {"1", "on", "t", "true", "y", "yes"}  # the strings FastAPI reads as a true bool
-
-
 def _cheap_search(request: Request) -> bool:
-    """The cache may answer it and it skips the cross-encoder; any other search spends the expensive budget."""
-    q = request.query_params
-    return "hybrid_rerank" not in q.getlist("ranker") and not any(v.lower() in _TRUE for v in q.getlist("no_cache"))
+    """No cross-encoder. Skipping the cache is not expensive on its own: a new query string misses it too."""
+    return "hybrid_rerank" not in request.query_params.getlist("ranker")
 
 
 def create_app(state: State | None = None) -> FastAPI:
