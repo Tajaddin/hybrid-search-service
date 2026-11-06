@@ -49,9 +49,12 @@ class Store:
             return None
         return self._redis
 
-    def _lost(self) -> None:
-        self._up = False
-        self._retry_at = time.monotonic() + self._retry_s
+    def _failed(self, exc: Exception) -> None:
+        """A dropped connection or a timeout marks Redis down until the next retry. Any other error, such as a
+        full Redis refusing a write, sends only this call to memory: reads still go to Redis."""
+        if isinstance(exc, (redis.ConnectionError, redis.TimeoutError, OSError)):
+            self._up = False
+            self._retry_at = time.monotonic() + self._retry_s
 
     # ---- simple values ---------------------------------------------------------------------------------
     def get_json(self, key: str) -> Any | None:
@@ -77,8 +80,8 @@ class Store:
 
             try:
                 return client.transaction(update, key, value_from_callable=True)
-            except (redis.RedisError, OSError):
-                self._lost()
+            except (redis.RedisError, OSError) as exc:
+                self._failed(exc)
         with self._lock:
             raw = self._mem_get(key)
             if raw is None:
@@ -92,8 +95,8 @@ class Store:
             try:
                 raw = client.get(key)
                 return None if raw is None else str(raw)
-            except (redis.RedisError, OSError):
-                self._lost()
+            except (redis.RedisError, OSError) as exc:
+                self._failed(exc)
         with self._lock:
             return self._mem_get(key)
 
@@ -102,8 +105,8 @@ class Store:
             try:
                 client.set(key, raw, ex=ttl_s)
                 return
-            except (redis.RedisError, OSError):
-                self._lost()
+            except (redis.RedisError, OSError) as exc:
+                self._failed(exc)
         with self._lock:
             self._mem_set(key, raw, ttl_s)
 
@@ -133,8 +136,8 @@ class Store:
                 pipe.ltrim(key, 0, cap - 1)
                 pipe.execute()
                 return
-            except (redis.RedisError, OSError):
-                self._lost()
+            except (redis.RedisError, OSError) as exc:
+                self._failed(exc)
         with self._lock:
             lst = self._lists.setdefault(key, [])
             lst.insert(0, value)
@@ -144,8 +147,8 @@ class Store:
         if (client := self._connected()) is not None:
             try:
                 return [str(x) for x in client.lrange(key, 0, limit - 1)]
-            except (redis.RedisError, OSError):
-                self._lost()
+            except (redis.RedisError, OSError) as exc:
+                self._failed(exc)
         with self._lock:
             return list(self._lists.get(key, [])[:limit])
 
@@ -156,6 +159,6 @@ class Store:
         if (client := self._connected()) is not None:
             try:
                 return bool(client.ping())
-            except (redis.RedisError, OSError):
-                self._lost()
+            except (redis.RedisError, OSError) as exc:
+                self._failed(exc)
         return False

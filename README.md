@@ -135,8 +135,11 @@ user can switch it off.
 
 **SLO and operations (ADR 0005).** p99 under 200 ms for uncached hybrid searches, reported per offered
 rate so the number comes with the load it was measured under, and watched by a Prometheus alert on the
-same histogram the k6 test exercises; the reranked variant is measured separately. While Redis is unreachable the API caches in-process (bounded) with a warning alert, and it reconnects when Redis is back. Six alert rules with
-promtool tests; a Grafana dashboard; OpenTelemetry traces when an endpoint is configured.
+same histogram the k6 test exercises; the reranked variant is measured separately. While Redis is
+unreachable each worker caches in-process (bounded) with a warning alert and reconnects when Redis is
+back; writes made meanwhile, interleaving impressions and clicks included, stay in that worker's memory
+and are not moved to Redis. Six alert rules with promtool tests; a Grafana dashboard; OpenTelemetry
+traces when an endpoint is configured.
 
 ## Tests
 

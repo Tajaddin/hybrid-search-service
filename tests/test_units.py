@@ -6,6 +6,7 @@ from pathlib import Path
 
 import fakeredis
 import pytest
+import redis
 
 from hss.cache import Store
 from hss.engine import rrf
@@ -171,6 +172,23 @@ def test_store_waits_before_trying_redis_again(fake_redis):
     fake_redis.connected = True
     store.set_json("k", 1, ttl_s=60)
     assert store.backend == "memory" and not store.ping()
+
+
+def test_store_stays_on_redis_when_it_refuses_a_write_and_leaves_it_on_a_timeout(fake_redis, monkeypatch):
+    store = Store("redis://redis:6379/0")
+    store.set_json("k", 1, ttl_s=60)
+
+    def refuse(*args, **kwargs):
+        raise redis.ResponseError("OOM command not allowed when used memory > 'maxmemory'.")
+
+    def time_out(*args, **kwargs):
+        raise redis.TimeoutError("Timeout reading from socket")
+
+    monkeypatch.setattr(fakeredis.FakeRedis, "set", refuse)
+    store.set_json("new", 2, ttl_s=60)  # a full Redis refuses writes and still answers reads
+    assert store.backend == "redis" and store.get_json("k") == 1
+    monkeypatch.setattr(fakeredis.FakeRedis, "get", time_out)
+    assert store.get_json("k") is None and store.backend == "memory"
 
 
 def test_store_update_keeps_a_concurrent_write_from_another_redis_client(fake_redis):
