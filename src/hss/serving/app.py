@@ -4,6 +4,7 @@ summary, health and metrics. Rate limits per client address; an admin key for th
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import random
@@ -303,7 +304,9 @@ def create_app(state: State | None = None) -> FastAPI:
     @app.get("/interleave/report")
     def interleave_report(request: Request, x_admin_key: Annotated[str | None, Header()] = None):
         x = st(request)
-        if not x.settings.admin_key or x_admin_key != x.settings.admin_key:
+        if not x.settings.admin_key or not hmac.compare_digest(
+            (x_admin_key or "").encode(), x.settings.admin_key.encode()
+        ):
             raise HTTPException(401, "admin key required")
         wins: dict[tuple[str, str], dict[str, int]] = {}
         impressions = 0

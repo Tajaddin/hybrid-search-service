@@ -162,6 +162,24 @@ def test_interleave_click_and_admin_report(client):
     assert report["impressions_with_clicks"] == 1 and report["live"][0]["queries"] == 1
 
 
+def test_admin_key_is_compared_in_constant_time(client, monkeypatch):
+    import hss.serving.app as app_module
+
+    compared = []
+
+    def compare_digest(a, b):
+        compared.append((a, b))
+        return a == b
+
+    monkeypatch.setattr(app_module.hmac, "compare_digest", compare_digest)
+    assert client.get("/interleave/report", headers={"X-Admin-Key": "adx"}).status_code == 401
+    assert client.get("/interleave/report", headers={"X-Admin-Key": "adm"}).status_code == 200
+    assert compared == [(b"adx", b"adm"), (b"adm", b"adm")]
+    monkeypatch.undo()
+    # a header outside ASCII is a wrong key, not a server error
+    assert client.get("/interleave/report", headers={"X-Admin-Key": "ключ".encode()}).status_code == 401
+
+
 def test_eval_summary_and_rate_limit(client):
     assert client.get("/eval/summary").json()["eval"]["queries"] == 2
     codes = [client.get("/suggest", params={"q": f"q{i}"}).status_code for i in range(10)]
