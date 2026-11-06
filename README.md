@@ -164,6 +164,10 @@ and starts the API and UI behind nginx on port 80. `make teardown` destroys it. 
 - One subset of one dataset; the numbers rank the variants against each other and are not comparable to
   published leaderboards.
 - Unjudged results count as irrelevant, which understates rankers that find good unjudged products.
+- The offline table runs with the understood brand and colour filters off
+  (`"understood_filters_applied": false` in `reports/eval.json`), while the API and the interleaving
+  apply them by default, so it does not measure the default served path; `hss evaluate --apply-filters`
+  does, and has not been run yet.
 - CPU models: the reranker is the slow part by design and is reported, not hidden.
 - Single-machine latency; one OpenSearch node.
 - The simulated interleaving verdict inherits its click model; real clicks come from the UI.
