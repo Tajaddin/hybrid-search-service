@@ -4,6 +4,7 @@ import json
 import random
 from pathlib import Path
 
+import fakeredis
 import pytest
 
 from hss.cache import Store
@@ -134,3 +135,39 @@ def test_store_memory_backend_roundtrip_and_ttl(monkeypatch):
     monkeypatch.setattr(_t, "time", lambda: far_future)
     assert store.get_json("k") is None  # expired
     assert Store("redis://127.0.0.1:1/0").backend == "memory"  # unreachable Redis degrades to memory
+
+
+def test_store_memory_is_bounded():
+    store = Store(None, max_entries=3)
+    for i in range(5):
+        store.set_json(f"k{i}", i, ttl_s=60)
+    assert [store.get_json(f"k{i}") for i in range(5)] == [None, None, 2, 3, 4]
+
+
+def test_store_reconnects_to_redis_and_uses_memory_only_while_it_is_down(fake_redis):
+    shared = fakeredis.FakeRedis(server=fake_redis, decode_responses=True)
+    fake_redis.connected = False
+    store = Store("redis://redis:6379/0", retry_s=0)
+    assert store.backend == "memory" and not store.ping()  # configured but unreachable: degraded, not healthy
+    store.set_json("outage", 1, ttl_s=60)
+    assert store.get_json("outage") == 1  # this process keeps answering meanwhile
+
+    fake_redis.connected = True
+    store.set_json("k", {"a": 1}, ttl_s=60)
+    assert store.backend == "redis" and store.ping()
+    assert json.loads(shared.get("k")) == {"a": 1} and 0 < shared.ttl("k") <= 60
+    store.push("l", "x")
+    assert shared.lrange("l", 0, -1) == ["x"]
+
+    fake_redis.connected = False
+    assert store.get_json("k") is None and store.backend == "memory"
+    fake_redis.connected = True
+    assert store.get_json("k") == {"a": 1} and store.items("l") == ["x"] and store.backend == "redis"
+
+
+def test_store_waits_before_trying_redis_again(fake_redis):
+    fake_redis.connected = False
+    store = Store("redis://redis:6379/0", retry_s=3600)
+    fake_redis.connected = True
+    store.set_json("k", 1, ttl_s=60)
+    assert store.backend == "memory" and not store.ping()

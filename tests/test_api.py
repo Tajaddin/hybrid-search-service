@@ -103,7 +103,7 @@ def client(tmp_path_factory):
 
 
 @contextmanager
-def serving(env: dict[str, str]) -> Iterator[TestClient]:
+def serving(env: dict[str, str], store: Store | None = None) -> Iterator[TestClient]:
     """A fresh app (one worker) on the fake engine with these settings; the client's address is 'testclient'."""
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
@@ -112,7 +112,7 @@ def serving(env: dict[str, str]) -> Iterator[TestClient]:
     from hss.serving.app import State, create_app
 
     try:
-        state = State(settings(), engine=FakeEngine(), store=Store(None))
+        state = State(settings(), engine=FakeEngine(), store=store or Store(None))
         with TestClient(create_app(state)) as c:
             c.engine = state.engine  # type: ignore[attr-defined]
             yield c
@@ -220,3 +220,16 @@ def test_workers_share_rate_limit_counts_through_redis_and_count_alone_while_it_
         assert codes == [200, 200, 200, 429]
         fake_redis.connected = False
         assert [worker1.get("/suggest", params={"q": "boots"}).status_code for _ in range(4)] == [200, 200, 200, 429]
+
+
+def test_health_and_cache_gauge_follow_redis_going_down_and_coming_back(fake_redis):
+    with serving(LIMITS, store=Store("redis://redis:6379/0", retry_s=0)) as c:
+        h = c.get("/health").json()
+        assert h["status"] == "ok" and h["cache"] == "redis" and "cache_backend_redis 1.0" in c.get("/metrics").text
+        fake_redis.connected = False
+        h = c.get("/health").json()
+        assert h["status"] == "degraded" and h["cache"] == "memory"
+        assert "cache_backend_redis 0.0" in c.get("/metrics").text
+        fake_redis.connected = True
+        h = c.get("/health").json()
+        assert h["status"] == "ok" and h["cache"] == "redis" and "cache_backend_redis 1.0" in c.get("/metrics").text

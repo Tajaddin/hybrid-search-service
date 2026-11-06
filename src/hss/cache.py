@@ -1,33 +1,56 @@
 """A small key-value layer: Redis when configured and reachable, an in-process dict otherwise (tests, and a
-degraded mode that keeps the API answering when Redis is down)."""
+degraded mode that keeps the API answering while Redis is down). An unreachable Redis is tried again every
+`retry_s` seconds, and the in-process dict keeps at most `max_entries` values."""
 
 from __future__ import annotations
 
 import json
 import threading
 import time
+from collections import OrderedDict
 from typing import Any
+
+import redis
 
 
 class Store:
-    def __init__(self, redis_url: str | None) -> None:
-        self.backend = "memory"
-        self._mem: dict[str, tuple[float | None, str]] = {}
+    def __init__(self, redis_url: str | None, retry_s: float = 5.0, max_entries: int = 10_000) -> None:
+        self._mem: OrderedDict[str, tuple[float | None, str]] = OrderedDict()
         self._lists: dict[str, list[str]] = {}
         self._lock = threading.Lock()
-        self._redis = None
-        if redis_url:
-            try:
-                import redis
+        self._max_entries = max_entries
+        self._retry_s = retry_s
+        self._redis = (
+            redis.Redis.from_url(redis_url, socket_connect_timeout=1, socket_timeout=1, decode_responses=True)
+            if redis_url
+            else None
+        )
+        self._up = False
+        self._retry_at = 0.0
+        self._connected()
 
-                client = redis.Redis.from_url(
-                    redis_url, socket_connect_timeout=1, socket_timeout=1, decode_responses=True
-                )
-                client.ping()
-                self._redis = client
-                self.backend = "redis"
-            except Exception:
-                self._redis = None
+    @property
+    def backend(self) -> str:
+        return "redis" if self._up else "memory"
+
+    def _connected(self) -> redis.Redis | None:
+        """The Redis client while it answers; None means use memory. A down Redis gets one ping per retry_s."""
+        if self._up or self._redis is None:
+            return self._redis
+        if time.monotonic() < self._retry_at:
+            return None
+        try:
+            self._up = bool(self._redis.ping())
+        except (redis.RedisError, OSError):
+            self._up = False
+        if not self._up:
+            self._retry_at = time.monotonic() + self._retry_s
+            return None
+        return self._redis
+
+    def _lost(self) -> None:
+        self._up = False
+        self._retry_at = time.monotonic() + self._retry_s
 
     # ---- simple values ---------------------------------------------------------------------------------
     def get_json(self, key: str) -> Any | None:
@@ -38,12 +61,12 @@ class Store:
         self._set(key, json.dumps(value, default=str), ttl_s)
 
     def _get(self, key: str) -> str | None:
-        if self._redis is not None:
+        if (client := self._connected()) is not None:
             try:
-                raw = self._redis.get(key)
+                raw = client.get(key)
                 return None if raw is None else str(raw)
-            except Exception:
-                return None
+            except (redis.RedisError, OSError):
+                self._lost()
         with self._lock:
             item = self._mem.get(key)
             if item is None:
@@ -55,44 +78,50 @@ class Store:
             return raw
 
     def _set(self, key: str, raw: str, ttl_s: int | None) -> None:
-        if self._redis is not None:
+        if (client := self._connected()) is not None:
             try:
-                self._redis.set(key, raw, ex=ttl_s)
-            except Exception:
+                client.set(key, raw, ex=ttl_s)
                 return
-            return
+            except (redis.RedisError, OSError):
+                self._lost()
         with self._lock:
             self._mem[key] = (time.time() + ttl_s if ttl_s else None, raw)
+            self._mem.move_to_end(key)
+            while len(self._mem) > self._max_entries:
+                self._mem.popitem(last=False)
 
     # ---- bounded lists (impressions) ----------------------------------------------------------------------
     def push(self, key: str, value: str, cap: int = 20_000) -> None:
-        if self._redis is not None:
+        if (client := self._connected()) is not None:
             try:
-                pipe = self._redis.pipeline()
+                pipe = client.pipeline()
                 pipe.lpush(key, value)
                 pipe.ltrim(key, 0, cap - 1)
                 pipe.execute()
-            except Exception:
                 return
-            return
+            except (redis.RedisError, OSError):
+                self._lost()
         with self._lock:
             lst = self._lists.setdefault(key, [])
             lst.insert(0, value)
             del lst[cap:]
 
     def items(self, key: str, limit: int = 20_000) -> list[str]:
-        if self._redis is not None:
+        if (client := self._connected()) is not None:
             try:
-                return [str(x) for x in self._redis.lrange(key, 0, limit - 1)]
-            except Exception:
-                return []
+                return [str(x) for x in client.lrange(key, 0, limit - 1)]
+            except (redis.RedisError, OSError):
+                self._lost()
         with self._lock:
             return list(self._lists.get(key, [])[:limit])
 
     def ping(self) -> bool:
+        """True for memory by configuration; a configured Redis must answer."""
         if self._redis is None:
-            return self.backend == "memory"
-        try:
-            return bool(self._redis.ping())
-        except Exception:
-            return False
+            return True
+        if (client := self._connected()) is not None:
+            try:
+                return bool(client.ping())
+            except (redis.RedisError, OSError):
+                self._lost()
+        return False

@@ -69,7 +69,7 @@ class State:
             engine = build_engine()
         self.engine = engine
         self.store = store or Store(s.redis_url)
-        CACHE_BACKEND.set(1 if self.store.backend == "redis" else 0)
+        CACHE_BACKEND.set_function(lambda: 1 if self.store.backend == "redis" else 0)
         self.rng = random.Random()
         self.reports = {name: self._json(s.reports_dir / f"{name}.json") for name in ("eval", "interleaving", "k6")}
         self.warmup_s = self._warm_up()

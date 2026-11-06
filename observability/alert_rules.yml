@@ -43,7 +43,7 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "the API is caching in-process instead of Redis"
-          description: "Redis was unreachable at start-up on {{ $labels.instance }}; results are not shared across replicas."
+          description: "Redis is unreachable from {{ $labels.instance }}; results are not shared across replicas until it reconnects."
 
       - alert: RateLimitingHeavy
         expr: increase(rate_limit_rejections_total[5m]) > 100
