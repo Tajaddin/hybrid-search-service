@@ -8,6 +8,7 @@ import json
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from typing import Any
 
 import redis
@@ -60,6 +61,32 @@ class Store:
     def set_json(self, key: str, value: Any, ttl_s: int | None) -> None:
         self._set(key, json.dumps(value, default=str), ttl_s)
 
+    def update_json(self, key: str, change: Callable[[Any], Any], ttl_s: int | None) -> Any | None:
+        """Read, change and write one value as a single step, so concurrent updates from any worker all land
+        (Redis: WATCH and MULTI, retried when another client wrote in between). None when the key is absent."""
+        if (client := self._connected()) is not None:
+
+            def update(pipe: Any) -> Any | None:
+                raw = pipe.get(key)
+                if raw is None:
+                    return None
+                value = change(json.loads(raw))
+                pipe.multi()
+                pipe.set(key, json.dumps(value, default=str), ex=ttl_s)
+                return value
+
+            try:
+                return client.transaction(update, key, value_from_callable=True)
+            except (redis.RedisError, OSError):
+                self._lost()
+        with self._lock:
+            raw = self._mem_get(key)
+            if raw is None:
+                return None
+            value = change(json.loads(raw))
+            self._mem_set(key, json.dumps(value, default=str), ttl_s)
+            return value
+
     def _get(self, key: str) -> str | None:
         if (client := self._connected()) is not None:
             try:
@@ -68,14 +95,7 @@ class Store:
             except (redis.RedisError, OSError):
                 self._lost()
         with self._lock:
-            item = self._mem.get(key)
-            if item is None:
-                return None
-            expires, raw = item
-            if expires is not None and expires < time.time():
-                del self._mem[key]
-                return None
-            return raw
+            return self._mem_get(key)
 
     def _set(self, key: str, raw: str, ttl_s: int | None) -> None:
         if (client := self._connected()) is not None:
@@ -85,10 +105,24 @@ class Store:
             except (redis.RedisError, OSError):
                 self._lost()
         with self._lock:
-            self._mem[key] = (time.time() + ttl_s if ttl_s else None, raw)
-            self._mem.move_to_end(key)
-            while len(self._mem) > self._max_entries:
-                self._mem.popitem(last=False)
+            self._mem_set(key, raw, ttl_s)
+
+    # ---- the in-process dict; callers hold the lock -------------------------------------------------------
+    def _mem_get(self, key: str) -> str | None:
+        item = self._mem.get(key)
+        if item is None:
+            return None
+        expires, raw = item
+        if expires is not None and expires < time.time():
+            del self._mem[key]
+            return None
+        return raw
+
+    def _mem_set(self, key: str, raw: str, ttl_s: int | None) -> None:
+        self._mem[key] = (time.time() + ttl_s if ttl_s else None, raw)
+        self._mem.move_to_end(key)
+        while len(self._mem) > self._max_entries:
+            self._mem.popitem(last=False)
 
     # ---- bounded lists (impressions) ----------------------------------------------------------------------
     def push(self, key: str, value: str, cap: int = 20_000) -> None:

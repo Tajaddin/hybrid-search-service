@@ -311,13 +311,16 @@ def create_app(state: State | None = None) -> FastAPI:
         position = body.get("position")
         if not impression_id or not isinstance(position, int):
             raise HTTPException(422, "impression_id and integer position are required")
-        record = x.store.get_json(f"hss:impression:{impression_id}")
+        key = f"hss:impression:{impression_id}"
+        record = x.store.get_json(key)
         if record is None:
             raise HTTPException(404, "unknown or expired impression")
         if not 0 <= position < len(record["teams"]):
             raise HTTPException(422, "position out of range")
-        record["clicks"].append(position)
-        x.store.set_json(f"hss:impression:{impression_id}", record, 6 * 3600)
+        # one atomic append: two clicks on the same page from different workers must both count
+        record = x.store.update_json(key, lambda r: {**r, "clicks": [*r["clicks"], position]}, 6 * 3600)
+        if record is None:
+            raise HTTPException(404, "unknown or expired impression")
         CLICKS.labels(record["teams"][position]).inc()
         return {"ok": True, "clicks": len(record["clicks"])}
 

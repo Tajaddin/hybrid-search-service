@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
@@ -172,6 +174,30 @@ def test_interleave_click_and_admin_report(client):
     assert client.get("/interleave/report").status_code == 401
     report = client.get("/interleave/report", headers={"X-Admin-Key": "adm"}).json()
     assert report["impressions_with_clicks"] == 1 and report["live"][0]["queries"] == 1
+
+
+def test_simultaneous_clicks_on_one_impression_are_all_kept(client, monkeypatch):
+    impression_id = client.get("/interleave", params={"q": "boots", "a": "bm25", "b": "knn", "size": 4}).json()[
+        "impression_id"
+    ]
+    key = f"hss:impression:{impression_id}"
+    store = client.app.state.api.store
+    read = store.get_json
+    both_read = threading.Barrier(2, timeout=5)
+
+    def get_json(k):
+        value = read(k)
+        if k == key:
+            both_read.wait()  # each request has read the record before either writes
+        return value
+
+    monkeypatch.setattr(store, "get_json", get_json)
+    with ThreadPoolExecutor(2) as pool:
+        responses = list(
+            pool.map(lambda p: client.post("/click", json={"impression_id": impression_id, "position": p}), [0, 1])
+        )
+    assert [r.status_code for r in responses] == [200, 200]
+    assert sorted(read(key)["clicks"]) == [0, 1]
 
 
 def test_admin_key_is_compared_in_constant_time(client, monkeypatch):

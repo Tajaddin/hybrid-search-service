@@ -171,3 +171,21 @@ def test_store_waits_before_trying_redis_again(fake_redis):
     fake_redis.connected = True
     store.set_json("k", 1, ttl_s=60)
     assert store.backend == "memory" and not store.ping()
+
+
+def test_store_update_keeps_a_concurrent_write_from_another_redis_client(fake_redis):
+    store = Store("redis://redis:6379/0")
+    other_worker = fakeredis.FakeRedis(server=fake_redis, decode_responses=True)
+    store.set_json("rec", {"clicks": []}, ttl_s=60)
+    seen = []
+
+    def add_click(record):
+        if not seen:  # another worker writes between this read and this write
+            other_worker.set("rec", json.dumps({"clicks": [9]}))
+        seen.append(record)
+        return {**record, "clicks": [*record["clicks"], 1]}
+
+    assert store.update_json("rec", add_click, ttl_s=60) == {"clicks": [9, 1]}
+    assert seen == [{"clicks": []}, {"clicks": [9]}]  # retried on the newer value
+    assert json.loads(other_worker.get("rec")) == {"clicks": [9, 1]} and 0 < other_worker.ttl("rec") <= 60
+    assert store.update_json("missing", add_click, ttl_s=60) is None
