@@ -89,7 +89,7 @@ flowchart LR
 | `hss index` | all-MiniLM-L6-v2 embeddings of title, brand and bullets (CPU, cached as `.npy`), one OpenSearch index with an English analyzer and a Lucene HNSW field. |
 | Rankers | `bm25`, `knn`, `hybrid` (RRF of both), `hybrid_rerank` (ms-marco-MiniLM-L-6-v2 over the fused top 50). |
 | Query understanding | SymSpell over the catalog vocabulary; brand and colour terms become filters (switchable); suggestions. |
-| API | `/search`, `/suggest`, `/interleave`, `/click`, `/interleave/report` (admin key), `/eval/summary`, `/health`, `/metrics`. Redis cache, per-address rate limit, request ids, JSON logs, OpenTelemetry. |
+| API | `/search`, `/suggest`, `/interleave`, `/click`, `/interleave/report` (admin key), `/eval/summary`, `/health`, `/metrics`. Redis cache, per-address rate limits counted in Redis (a smaller shared budget for reranked, uncached and interleaved searches), request ids, JSON logs, OpenTelemetry. |
 | UI | Search with facets and ranker selector, interleaving mode with click logging, evaluation tab. |
 | Eval | NDCG@10 and MRR@10 per ranker with intervals and paired comparisons; simulated interleaving readout; k6 latency at a stated rate. |
 
@@ -165,7 +165,7 @@ and starts the API and UI behind nginx on port 80. `make teardown` destroys it. 
   published leaderboards.
 - Unjudged results count as irrelevant, which understates rankers that find good unjudged products.
 - CPU models: the reranker is the slow part by design and is reported, not hidden.
-- Single-machine latency; one OpenSearch node; rate limiting per process.
+- Single-machine latency; one OpenSearch node.
 - The simulated interleaving verdict inherits its click model; real clicks come from the UI.
 
 ## Data and licences

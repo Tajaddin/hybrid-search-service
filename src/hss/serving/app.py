@@ -1,5 +1,6 @@
 """FastAPI: search with a cache, suggestions, team-draft interleaving with a click log, the evaluation
-summary, health and metrics. Rate limits per client address; an admin key for the interleaving readout."""
+summary, health and metrics. Rate limits per client address, counted in Redis and tighter for the searches
+that rerank or skip the cache; an admin key for the interleaving readout."""
 
 from __future__ import annotations
 
@@ -117,13 +118,30 @@ def _key(request: Request) -> str:
     return get_remote_address(request)
 
 
+_TRUE = {"1", "on", "t", "true", "y", "yes"}  # the strings FastAPI reads as a true bool
+
+
+def _cheap_search(request: Request) -> bool:
+    """The cache may answer it and it skips the cross-encoder; any other search spends the expensive budget."""
+    q = request.query_params
+    return "hybrid_rerank" not in q.getlist("ranker") and not any(v.lower() in _TRUE for v in q.getlist("no_cache"))
+
+
 def create_app(state: State | None = None) -> FastAPI:
     s = settings()
     configure_logging(s.log_level, s.service_name)
     app = FastAPI(title="Hybrid search service", version=__version__, lifespan=lifespan, docs_url="/docs")
     if state is not None:
         app.state.api = state
-    limiter = Limiter(key_func=_key, default_limits=[])
+    # Counts live in Redis so every worker draws on one budget per address; while Redis is unreachable each
+    # worker counts in memory and keeps checking whether it is back.
+    timeouts: dict[str, Any] = {"socket_connect_timeout": 1, "socket_timeout": 1} if s.redis_url else {}
+    limiter = Limiter(
+        key_func=_key,
+        storage_uri=s.redis_url or "memory://",
+        storage_options=timeouts,
+        in_memory_fallback_enabled=True,
+    )
     app.state.limiter = limiter
     app.add_middleware(
         CORSMiddleware,
@@ -191,6 +209,7 @@ def create_app(state: State | None = None) -> FastAPI:
 
     @app.get("/search")
     @limiter.limit(s.rate_limit)
+    @limiter.shared_limit(s.expensive_rate_limit, scope="expensive", exempt_when=_cheap_search)
     def search(
         request: Request,
         q: Annotated[str, Query(min_length=1, max_length=200)],
@@ -247,6 +266,7 @@ def create_app(state: State | None = None) -> FastAPI:
     # ---- interleaving --------------------------------------------------------------------------------------
     @app.get("/interleave")
     @limiter.limit(s.rate_limit)
+    @limiter.shared_limit(s.expensive_rate_limit, scope="expensive")  # two uncached searches per page
     def interleave_(
         request: Request,
         q: Annotated[str, Query(min_length=1, max_length=200)],

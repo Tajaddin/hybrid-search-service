@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import pytest
@@ -90,27 +92,37 @@ def client(tmp_path_factory):
     )
     env = {
         "HSS_RATE_LIMIT": "8/minute",
+        "HSS_EXPENSIVE_RATE_LIMIT": "8/minute",
         "HSS_ADMIN_KEY": "adm",
         "HSS_REPORTS_DIR": str(reports),
         "HSS_REDIS_URL": "",
         "HSS_CACHE_TTL_S": "60",
     }
+    with serving(env) as c:
+        yield c
+
+
+@contextmanager
+def serving(env: dict[str, str]) -> Iterator[TestClient]:
+    """A fresh app (one worker) on the fake engine with these settings; the client's address is 'testclient'."""
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     reset_settings_cache()
     from hss.config import settings
     from hss.serving.app import State, create_app
 
-    state = State(settings(), engine=FakeEngine(), store=Store(None))
-    with TestClient(create_app(state)) as c:
-        c.engine = state.engine  # type: ignore[attr-defined]
-        yield c
-    for k, v in old.items():
-        if v is None:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = v
-    reset_settings_cache()
+    try:
+        state = State(settings(), engine=FakeEngine(), store=Store(None))
+        with TestClient(create_app(state)) as c:
+            c.engine = state.engine  # type: ignore[attr-defined]
+            yield c
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        reset_settings_cache()
 
 
 def test_health_and_metrics(client):
@@ -184,3 +196,27 @@ def test_eval_summary_and_rate_limit(client):
     assert client.get("/eval/summary").json()["eval"]["queries"] == 2
     codes = [client.get("/suggest", params={"q": f"q{i}"}).status_code for i in range(10)]
     assert 429 in codes and codes[0] == 200
+
+
+LIMITS = {"HSS_REDIS_URL": "", "HSS_RATE_LIMIT": "100/minute", "HSS_EXPENSIVE_RATE_LIMIT": "2/minute"}
+
+
+def test_reranked_uncached_and_interleaved_searches_share_a_smaller_budget():
+    with serving(LIMITS) as c:
+        assert c.get("/search", params={"q": "a", "ranker": "hybrid_rerank"}).status_code == 200
+        assert c.get("/search", params={"q": "b", "no_cache": "true"}).status_code == 200
+        assert c.get("/search", params={"q": "c", "ranker": "hybrid_rerank"}).status_code == 429
+        assert c.get("/search", params={"q": "d", "no_cache": "1"}).status_code == 429
+        assert c.get("/interleave", params={"q": "e", "a": "bm25", "b": "knn"}).status_code == 429
+        # cacheable searches without the reranker only spend the general budget
+        assert c.get("/search", params={"q": "f", "ranker": "hybrid"}).status_code == 200
+        assert c.get("/search", params={"q": "g", "no_cache": "false"}).status_code == 200
+
+
+def test_workers_share_rate_limit_counts_through_redis_and_count_alone_while_it_is_down(fake_redis):
+    env = {**LIMITS, "HSS_REDIS_URL": "redis://redis:6379/0", "HSS_RATE_LIMIT": "3/minute"}
+    with serving(env) as worker1, serving(env) as worker2:
+        codes = [w.get("/suggest", params={"q": "boots"}).status_code for w in (worker1, worker2, worker1, worker2)]
+        assert codes == [200, 200, 200, 429]
+        fake_redis.connected = False
+        assert [worker1.get("/suggest", params={"q": "boots"}).status_code for _ in range(4)] == [200, 200, 200, 429]

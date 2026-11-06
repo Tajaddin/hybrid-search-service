@@ -37,7 +37,10 @@ services:
       HSS_PREPARED_DIR: /data/prepared
       HSS_MODELS_DIR: /data/models
       HSS_REPORTS_DIR: /app/reports
-      HSS_RATE_LIMIT: ${HSS_RATE_LIMIT:-6000/minute}  # per client address; the k6 run comes from one address
+      # per client address; the k6 run comes from one address, so locally both budgets are wide. cloud-init sets
+      # the production ones.
+      HSS_RATE_LIMIT: ${HSS_RATE_LIMIT:-6000/minute}
+      HSS_EXPENSIVE_RATE_LIMIT: ${HSS_EXPENSIVE_RATE_LIMIT:-6000/minute}
       HSS_ADMIN_KEY: ${HSS_ADMIN_KEY:-}
       HSS_CORS_ORIGINS: ${HSS_CORS_ORIGINS:-http://localhost:4310,http://localhost:5173}
       HSS_LOG_LEVEL: ${HSS_LOG_LEVEL:-INFO}

@@ -25,6 +25,8 @@ write_files:
     permissions: "0600"
     content: |
       HSS_ADMIN_KEY=${admin_key}
+      HSS_RATE_LIMIT=120/minute
+      HSS_EXPENSIVE_RATE_LIMIT=20/minute
       UI_PORT=80
       API_PORT=8120
       OPENSEARCH_JAVA_OPTS=-Xms4g -Xmx4g
