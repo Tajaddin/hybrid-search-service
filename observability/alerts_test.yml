@@ -37,7 +37,7 @@ tests:
           - exp_labels: { severity: warning, job: hss-api, instance: "api:8000" }
             exp_annotations:
               summary: "the API is caching in-process instead of Redis"
-              description: "Redis was unreachable at start-up on api:8000; results are not shared across replicas."
+              description: "Redis is unreachable from api:8000; results are not shared across replicas until it reconnects."
       - eval_time: 5m
         alertname: ApiDown
         exp_alerts:

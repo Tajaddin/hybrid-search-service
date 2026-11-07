@@ -38,6 +38,7 @@ dev = [
   "mypy>=1.14",
   "pandas-stubs>=2.2",
   "pip-audit>=2.7",
+  "fakeredis[lua]>=2.40",
 ]
 
 [project.scripts]

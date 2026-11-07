@@ -46,6 +46,8 @@ labels; `make load` runs k6 at 10, 25 and 50 requests/s against the Compose stac
 one summary per rate (`reports/k6-r*.json`). The hybrid and reranked scenarios bypass the cache so the
 numbers are the engine's; a short third scenario replays the sample with the cache on. Latencies in the
 evaluation table are single-query, in-process; the k6 numbers are what a client sees, including queueing.
+The k6 runs predate the rate limiter counting in Redis, which adds one Redis call per limit to each
+rate-limited request; they have not been rerun since.
 
 The first load run is kept as `reports/k6-before-tuning-r50.json`: 50 requests/s gave a hybrid p99 of
 33 s with no failed requests, which is a service that is up and useless. Three changes followed, each
@@ -89,7 +91,7 @@ flowchart LR
 | `hss index` | all-MiniLM-L6-v2 embeddings of title, brand and bullets (CPU, cached as `.npy`), one OpenSearch index with an English analyzer and a Lucene HNSW field. |
 | Rankers | `bm25`, `knn`, `hybrid` (RRF of both), `hybrid_rerank` (ms-marco-MiniLM-L-6-v2 over the fused top 50). |
 | Query understanding | SymSpell over the catalog vocabulary; brand and colour terms become filters (switchable); suggestions. |
-| API | `/search`, `/suggest`, `/interleave`, `/click`, `/interleave/report` (admin key), `/eval/summary`, `/health`, `/metrics`. Redis cache, per-address rate limit, request ids, JSON logs, OpenTelemetry. |
+| API | `/search`, `/suggest`, `/interleave`, `/click`, `/interleave/report` (admin key), `/eval/summary`, `/health`, `/metrics`. Redis cache, per-address rate limits counted in Redis (a smaller shared budget for reranked and interleaved searches), request ids, JSON logs, OpenTelemetry. |
 | UI | Search with facets and ranker selector, interleaving mode with click logging, evaluation tab. |
 | Eval | NDCG@10 and MRR@10 per ranker with intervals and paired comparisons; simulated interleaving readout; k6 latency at a stated rate. |
 
@@ -135,8 +137,11 @@ user can switch it off.
 
 **SLO and operations (ADR 0005).** p99 under 200 ms for uncached hybrid searches, reported per offered
 rate so the number comes with the load it was measured under, and watched by a Prometheus alert on the
-same histogram the k6 test exercises; the reranked variant is measured separately. Redis falls back to an in-process cache with a warning alert. Six alert rules with
-promtool tests; a Grafana dashboard; OpenTelemetry traces when an endpoint is configured.
+same histogram the k6 test exercises; the reranked variant is measured separately. While Redis is
+unreachable each worker caches in-process (bounded) with a warning alert and reconnects when Redis is
+back; writes made meanwhile, interleaving impressions and clicks included, stay in that worker's memory
+and are not moved to Redis. Six alert rules with promtool tests; a Grafana dashboard; OpenTelemetry
+traces when an endpoint is configured.
 
 ## Tests
 
@@ -164,8 +169,12 @@ and starts the API and UI behind nginx on port 80. `make teardown` destroys it. 
 - One subset of one dataset; the numbers rank the variants against each other and are not comparable to
   published leaderboards.
 - Unjudged results count as irrelevant, which understates rankers that find good unjudged products.
+- The offline table runs with the understood brand and colour filters off
+  (`"understood_filters_applied": false` in `reports/eval.json`), while the API and the interleaving
+  apply them by default, so it does not measure the default served path; `hss evaluate --apply-filters`
+  does, and has not been run yet.
 - CPU models: the reranker is the slow part by design and is reported, not hidden.
-- Single-machine latency; one OpenSearch node; rate limiting per process.
+- Single-machine latency; one OpenSearch node.
 - The simulated interleaving verdict inherits its click model; real clicks come from the UI.
 
 ## Data and licences

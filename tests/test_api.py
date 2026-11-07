@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import pytest
@@ -90,27 +94,37 @@ def client(tmp_path_factory):
     )
     env = {
         "HSS_RATE_LIMIT": "8/minute",
+        "HSS_EXPENSIVE_RATE_LIMIT": "8/minute",
         "HSS_ADMIN_KEY": "adm",
         "HSS_REPORTS_DIR": str(reports),
         "HSS_REDIS_URL": "",
         "HSS_CACHE_TTL_S": "60",
     }
+    with serving(env) as c:
+        yield c
+
+
+@contextmanager
+def serving(env: dict[str, str], store: Store | None = None) -> Iterator[TestClient]:
+    """A fresh app (one worker) on the fake engine with these settings; the client's address is 'testclient'."""
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     reset_settings_cache()
     from hss.config import settings
     from hss.serving.app import State, create_app
 
-    state = State(settings(), engine=FakeEngine(), store=Store(None))
-    with TestClient(create_app(state)) as c:
-        c.engine = state.engine  # type: ignore[attr-defined]
-        yield c
-    for k, v in old.items():
-        if v is None:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = v
-    reset_settings_cache()
+    try:
+        state = State(settings(), engine=FakeEngine(), store=store or Store(None))
+        with TestClient(create_app(state)) as c:
+            c.engine = state.engine  # type: ignore[attr-defined]
+            yield c
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        reset_settings_cache()
 
 
 def test_health_and_metrics(client):
@@ -162,7 +176,88 @@ def test_interleave_click_and_admin_report(client):
     assert report["impressions_with_clicks"] == 1 and report["live"][0]["queries"] == 1
 
 
+def test_simultaneous_clicks_on_one_impression_are_all_kept(client, monkeypatch):
+    impression_id = client.get("/interleave", params={"q": "boots", "a": "bm25", "b": "knn", "size": 4}).json()[
+        "impression_id"
+    ]
+    key = f"hss:impression:{impression_id}"
+    store = client.app.state.api.store
+    read = store.get_json
+    both_read = threading.Barrier(2, timeout=5)
+
+    def get_json(k):
+        value = read(k)
+        if k == key:
+            both_read.wait()  # each request has read the record before either writes
+        return value
+
+    monkeypatch.setattr(store, "get_json", get_json)
+    with ThreadPoolExecutor(2) as pool:
+        responses = list(
+            pool.map(lambda p: client.post("/click", json={"impression_id": impression_id, "position": p}), [0, 1])
+        )
+    assert [r.status_code for r in responses] == [200, 200]
+    assert sorted(read(key)["clicks"]) == [0, 1]
+
+
+def test_admin_key_is_compared_in_constant_time(client, monkeypatch):
+    import hss.serving.app as app_module
+
+    compared = []
+
+    def compare_digest(a, b):
+        compared.append((a, b))
+        return a == b
+
+    monkeypatch.setattr(app_module.hmac, "compare_digest", compare_digest)
+    assert client.get("/interleave/report", headers={"X-Admin-Key": "adx"}).status_code == 401
+    assert client.get("/interleave/report", headers={"X-Admin-Key": "adm"}).status_code == 200
+    assert compared == [(b"adx", b"adm"), (b"adm", b"adm")]
+    monkeypatch.undo()
+    # a header outside ASCII is a wrong key, not a server error
+    assert client.get("/interleave/report", headers={"X-Admin-Key": "ключ".encode()}).status_code == 401
+
+
 def test_eval_summary_and_rate_limit(client):
     assert client.get("/eval/summary").json()["eval"]["queries"] == 2
     codes = [client.get("/suggest", params={"q": f"q{i}"}).status_code for i in range(10)]
     assert 429 in codes and codes[0] == 200
+
+
+LIMITS = {"HSS_REDIS_URL": "", "HSS_RATE_LIMIT": "100/minute", "HSS_EXPENSIVE_RATE_LIMIT": "2/minute"}
+
+
+def test_reranked_and_interleaved_searches_share_a_smaller_budget():
+    with serving(LIMITS) as c:
+        assert c.get("/search", params={"q": "a", "ranker": "hybrid_rerank"}).status_code == 200
+        assert c.get("/interleave", params={"q": "b", "a": "bm25", "b": "knn"}).status_code == 200
+        assert c.get("/search", params={"q": "c", "ranker": "hybrid_rerank"}).status_code == 429
+        assert c.get("/interleave", params={"q": "d", "a": "bm25", "b": "knn"}).status_code == 429
+        # skipping the cache costs what a new query costs, so without the reranker it spends the general budget
+        codes = [c.get("/search", params={"q": "e", "ranker": r, "no_cache": "true"}).status_code for r in RANKERS]
+        assert codes == [200, 200, 200]
+
+
+RANKERS = ("bm25", "knn", "hybrid")
+
+
+def test_workers_share_rate_limit_counts_through_redis_and_count_alone_while_it_is_down(fake_redis):
+    env = {**LIMITS, "HSS_REDIS_URL": "redis://redis:6379/0", "HSS_RATE_LIMIT": "3/minute"}
+    with serving(env) as worker1, serving(env) as worker2:
+        codes = [w.get("/suggest", params={"q": "boots"}).status_code for w in (worker1, worker2, worker1, worker2)]
+        assert codes == [200, 200, 200, 429]
+        fake_redis.connected = False
+        assert [worker1.get("/suggest", params={"q": "boots"}).status_code for _ in range(4)] == [200, 200, 200, 429]
+
+
+def test_health_and_cache_gauge_follow_redis_going_down_and_coming_back(fake_redis):
+    with serving(LIMITS, store=Store("redis://redis:6379/0", retry_s=0)) as c:
+        h = c.get("/health").json()
+        assert h["status"] == "ok" and h["cache"] == "redis" and "cache_backend_redis 1.0" in c.get("/metrics").text
+        fake_redis.connected = False
+        h = c.get("/health").json()
+        assert h["status"] == "degraded" and h["cache"] == "memory"
+        assert "cache_backend_redis 0.0" in c.get("/metrics").text
+        fake_redis.connected = True
+        h = c.get("/health").json()
+        assert h["status"] == "ok" and h["cache"] == "redis" and "cache_backend_redis 1.0" in c.get("/metrics").text

@@ -1,9 +1,11 @@
 """FastAPI: search with a cache, suggestions, team-draft interleaving with a click log, the evaluation
-summary, health and metrics. Rate limits per client address; an admin key for the interleaving readout."""
+summary, health and metrics. Rate limits per client address, counted in Redis and tighter for reranked and
+interleaved searches; an admin key for the interleaving readout."""
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import random
@@ -67,7 +69,7 @@ class State:
             engine = build_engine()
         self.engine = engine
         self.store = store or Store(s.redis_url)
-        CACHE_BACKEND.set(1 if self.store.backend == "redis" else 0)
+        CACHE_BACKEND.set_function(lambda: 1 if self.store.backend == "redis" else 0)
         self.rng = random.Random()
         self.reports = {name: self._json(s.reports_dir / f"{name}.json") for name in ("eval", "interleaving", "k6")}
         self.warmup_s = self._warm_up()
@@ -116,13 +118,26 @@ def _key(request: Request) -> str:
     return get_remote_address(request)
 
 
+def _cheap_search(request: Request) -> bool:
+    """No cross-encoder. Skipping the cache is not expensive on its own: a new query string misses it too."""
+    return "hybrid_rerank" not in request.query_params.getlist("ranker")
+
+
 def create_app(state: State | None = None) -> FastAPI:
     s = settings()
     configure_logging(s.log_level, s.service_name)
     app = FastAPI(title="Hybrid search service", version=__version__, lifespan=lifespan, docs_url="/docs")
     if state is not None:
         app.state.api = state
-    limiter = Limiter(key_func=_key, default_limits=[])
+    # Counts live in Redis so every worker draws on one budget per address; while Redis is unreachable each
+    # worker counts in memory and keeps checking whether it is back.
+    timeouts: dict[str, Any] = {"socket_connect_timeout": 1, "socket_timeout": 1} if s.redis_url else {}
+    limiter = Limiter(
+        key_func=_key,
+        storage_uri=s.redis_url or "memory://",
+        storage_options=timeouts,
+        in_memory_fallback_enabled=True,
+    )
     app.state.limiter = limiter
     app.add_middleware(
         CORSMiddleware,
@@ -190,6 +205,7 @@ def create_app(state: State | None = None) -> FastAPI:
 
     @app.get("/search")
     @limiter.limit(s.rate_limit)
+    @limiter.shared_limit(s.expensive_rate_limit, scope="expensive", exempt_when=_cheap_search)
     def search(
         request: Request,
         q: Annotated[str, Query(min_length=1, max_length=200)],
@@ -246,6 +262,7 @@ def create_app(state: State | None = None) -> FastAPI:
     # ---- interleaving --------------------------------------------------------------------------------------
     @app.get("/interleave")
     @limiter.limit(s.rate_limit)
+    @limiter.shared_limit(s.expensive_rate_limit, scope="expensive")  # two uncached searches per page
     def interleave_(
         request: Request,
         q: Annotated[str, Query(min_length=1, max_length=200)],
@@ -290,20 +307,25 @@ def create_app(state: State | None = None) -> FastAPI:
         position = body.get("position")
         if not impression_id or not isinstance(position, int):
             raise HTTPException(422, "impression_id and integer position are required")
-        record = x.store.get_json(f"hss:impression:{impression_id}")
+        key = f"hss:impression:{impression_id}"
+        record = x.store.get_json(key)
         if record is None:
             raise HTTPException(404, "unknown or expired impression")
         if not 0 <= position < len(record["teams"]):
             raise HTTPException(422, "position out of range")
-        record["clicks"].append(position)
-        x.store.set_json(f"hss:impression:{impression_id}", record, 6 * 3600)
+        # one atomic append: two clicks on the same page from different workers must both count
+        record = x.store.update_json(key, lambda r: {**r, "clicks": [*r["clicks"], position]}, 6 * 3600)
+        if record is None:
+            raise HTTPException(404, "unknown or expired impression")
         CLICKS.labels(record["teams"][position]).inc()
         return {"ok": True, "clicks": len(record["clicks"])}
 
     @app.get("/interleave/report")
     def interleave_report(request: Request, x_admin_key: Annotated[str | None, Header()] = None):
         x = st(request)
-        if not x.settings.admin_key or x_admin_key != x.settings.admin_key:
+        if not x.settings.admin_key or not hmac.compare_digest(
+            (x_admin_key or "").encode(), x.settings.admin_key.encode()
+        ):
             raise HTTPException(401, "admin key required")
         wins: dict[tuple[str, str], dict[str, int]] = {}
         impressions = 0

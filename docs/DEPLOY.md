@@ -34,6 +34,11 @@ region (`terraform apply -var region=us-phoenix-1`).
    UI.
 5. Open `http://<public_ip>`; `http://<public_ip>/api/health` for the API. Only port 80 is reachable;
    OpenSearch and Redis are not published on the VM.
+   The VM's `.env` sets the production rate limits per client address: 120 requests a minute per route,
+   and 20 a minute shared by searches with the reranker and by interleaved pages. The counts live in
+   Redis, so every worker, and every replica that uses the same Redis, draws on one budget per address:
+   a limit that was sized for one process or one pod now covers the whole deployment. Raise
+   `HSS_RATE_LIMIT` and `HSS_EXPENSIVE_RATE_LIMIT` in `/opt/hss/.env` before a load test from one address.
 6. `make teardown` destroys everything.
 
 The GHCR images are private by default; cloud-init pulls them anonymously, so either make the two
