@@ -9,7 +9,7 @@ compared online-style with team-draft interleaving. Terraform for an Oracle Clou
 Actions that index a small catalog and run the end-to-end test on every push.
 
 **Status: built and verified locally (2026-10-17); not deployed.** Every number below comes from the
-committed scripts on this machine (i7, 20 threads, CPU only for the models).
+committed scripts on this machine (Intel i5-13600KF, 20 threads, CPU only for the models).
 
 ## Results
 
@@ -32,9 +32,9 @@ committed scripts on this machine (i7, 20 threads, CPU only for the models).
 
   | offered rate | hybrid uncached p50 / p95 / p99 ms | n | with rerank p50 / p99 ms | n | cached p99 ms | failed | p99 < 200 ms |
   |---|---|---|---|---|---|---|---|
-  | 10/s | 24 / 31 / **38** | 600 | 645 / 1149 | 120 | 3 | 0.00% | met |
-  | 25/s | 23 / 30 / **35** | 1,501 | 1005 / 2015 | 121 | 3 | 0.00% | met |
-  | 50/s | 26 / 37 / **55** | 3,001 | 662 / 1287 | 120 | 3 | 0.00% | met |
+  | 10/s | 24 / 30 / **34** | 601 | 632 / 1541 | 121 | 3 | 0.00% | met |
+  | 25/s | 23 / 29 / **35** | 1,500 | 554 / 969 | 120 | 3 | 0.00% | met |
+  | 50/s | 25 / 31 / **37** | 3,000 | 1303 / 2431 | 121 | 3 | 0.00% | met |
 
   The SLO holds up to **50 requests/s** of uncached hybrid searches on this machine.
 <!-- /RESULTS -->
@@ -46,8 +46,14 @@ labels; `make load` runs k6 at 10, 25 and 50 requests/s against the Compose stac
 one summary per rate (`reports/k6-r*.json`). The hybrid and reranked scenarios bypass the cache so the
 numbers are the engine's; a short third scenario replays the sample with the cache on. Latencies in the
 evaluation table are single-query, in-process; the k6 numbers are what a client sees, including queueing.
-The k6 runs predate the rate limiter counting in Redis, which adds one Redis call per limit to each
-rate-limited request; they have not been rerun since.
+The load table was rerun on 2026-11-07 against the code at 59bcf77, with the images rebuilt from it, so it
+includes the rate limiter counting in Redis (one Redis call per limit per request). Machine state before
+the run: CPU load 8%, 8.2 GB of 32 GB free, nothing else running in Docker (Docker Desktop with 20 CPUs
+and 16 GB), GPU unused by this CPU-only stack. The first run of that session, at 10 requests/s straight after starting
+OpenSearch, missed the SLO: hybrid p99 218 ms over 601 requests (`reports/k6-cold-start-r10.json`). The 30
+warm-up queries in the k6 setup do not page a 2 GB segment back into memory after a fresh start, and the
+slow requests were all in the first 20 seconds of that run. The table is the full second pass, on the stack
+the first pass had warmed.
 
 The first load run is kept as `reports/k6-before-tuning-r50.json`: 50 requests/s gave a hybrid p99 of
 33 s with no failed requests, which is a service that is up and useless. Three changes followed, each
@@ -56,8 +62,9 @@ instead of two sequential calls; the loader force-merges the static catalog to o
 k-NN query walks every segment's HNSW graph (the bulk load had left seven); and each worker runs its
 CPU models under a lock, since concurrent request threads calling the same PyTorch model only thrash
 the OMP pool. Throughput then scales with uvicorn workers (`HSS_WORKERS`, 4 in Compose). The table
-above is the rerun; the rate at which the SLO stops holding is the machine's capacity, stated rather
-than hidden. The reranked variant has its own ceiling: about 0.35 s of cross-encoder CPU per request,
+above is the rerun on the tuned code (its 2026-11-07 pass; the before-tuning files are from 2026-10-17, so the
+comparison spans different days and image builds, which at 33 s against 37 ms changes nothing); the rate at
+which the SLO stops holding is the machine's capacity, stated rather than hidden. The reranked variant has its own ceiling: about 0.35 s of cross-encoder CPU per request,
 and uvicorn workers share connections unevenly, so 4 requests/s queued to a p99 of 16 s
 (`reports/k6-before-rerank-4ps-r50.json`) while 2 requests/s holds (table). More rerank capacity means
 more workers behind a proxy that spreads connections, a smaller candidate set, or a quantised model.
